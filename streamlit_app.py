@@ -1,5 +1,6 @@
 import os
 import re
+import zipfile
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
@@ -9,13 +10,13 @@ from concurrent.futures import ThreadPoolExecutor
 import shutil
 import time
 
-# Create a folder to save files
+# Temporary directory to store files
 save_dir = "MangaChapters"
 os.makedirs(save_dir, exist_ok=True)
 
 # Streamlit UI
 st.title("FlashFast Manhwa Downloader")
-st.subheader("Download chapters of your favorite manhwa as PDF!")
+st.subheader("Download chapters of your favorite manhwa as PDF and ZIP!")
 
 # Clear previous files
 def clear_directory(directory):
@@ -107,6 +108,14 @@ def process_chapter(base_url, chapter_num):
 
     return pdf_file
 
+# Create ZIP file from all PDFs
+def create_zip_file(pdf_files, zip_name):
+    zip_path = os.path.join(save_dir, zip_name)
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        for pdf in pdf_files:
+            zipf.write(pdf, os.path.basename(pdf))
+    return zip_path
+
 # Streamlit inputs
 base_url = st.text_input("Enter the Base URL (e.g., https://example.com/manga):")
 start_chapter = st.number_input("Start Chapter", min_value=1, step=1)
@@ -121,20 +130,29 @@ if st.button("Download Chapters"):
         clear_directory(save_dir)
         pdf_files = []
 
-        for chapter in range(int(start_chapter), int(end_chapter) + 1):
-            pdf_file = process_chapter(base_url, chapter)
-            if pdf_file:
-                pdf_files.append(pdf_file)
+        # Process chapters concurrently
+        chapters = list(range(int(start_chapter), int(end_chapter) + 1))
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(process_chapter, base_url, chapter): chapter for chapter in chapters}
+            for future in futures:
+                chapter = futures[future]
+                try:
+                    pdf_file = future.result()
+                    if pdf_file:
+                        pdf_files.append(pdf_file)
+                except Exception as e:
+                    st.error(f"Error processing Chapter {chapter}: {e}")
 
         if pdf_files:
             st.success("Chapters downloaded successfully!")
-            for pdf_file in pdf_files:
-                with open(pdf_file, "rb") as file:
-                    st.download_button(
-                        label=f"Download {os.path.basename(pdf_file)}",
-                        data=file,
-                        file_name=os.path.basename(pdf_file),
-                        mime="application/pdf",
-                    )
+            # Create ZIP file
+            zip_file = create_zip_file(pdf_files, "All_Chapters.zip")
+            with open(zip_file, "rb") as file:
+                st.download_button(
+                    label="Download All Chapters as ZIP",
+                    data=file,
+                    file_name="All_Chapters.zip",
+                    mime="application/zip",
+                )
         else:
             st.error("No chapters were downloaded.")
